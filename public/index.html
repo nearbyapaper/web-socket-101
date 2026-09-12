@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>simple-websocket test page</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 24px 16px 80px;
+    background: #0b0d12;
+    color: #e7e9ee;
+  }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  .sub { color: #9aa1ad; font-size: 13px; margin-bottom: 20px; }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: #1a1d24;
+    margin-bottom: 16px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }
+  .dot.open { background: #22c55e; }
+  .dot.connecting { background: #eab308; }
+  .dot.closed { background: #ef4444; }
+  input, textarea, button {
+    font: inherit;
+    border-radius: 8px;
+    border: 1px solid #2a2e37;
+    background: #14161c;
+    color: #e7e9ee;
+    padding: 10px 12px;
+  }
+  input, textarea { width: 100%; box-sizing: border-box; }
+  .row { display: flex; gap: 8px; margin-bottom: 10px; }
+  .row input:first-child { flex: 0 0 140px; }
+  .row input:last-child { flex: 1; }
+  button {
+    background: #2563eb;
+    border-color: #2563eb;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  button:hover { background: #1d4ed8; }
+  button.secondary { background: #14161c; border-color: #2a2e37; font-weight: 500; }
+  button.secondary:hover { background: #1a1d24; }
+  .actions { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+  .latest-badge {
+    flex: 1;
+    min-width: 120px;
+    font-size: 12px;
+    color: #9aa1ad;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .latest-badge.fresh { color: #4ade80; }
+  #log {
+    border: 1px solid #2a2e37;
+    border-radius: 8px;
+    background: #0f1116;
+    padding: 10px;
+    height: 320px;
+    overflow-y: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .entry { padding: 4px 0; border-bottom: 1px solid #1a1d24; }
+  .entry:last-child { border-bottom: none; }
+  .dir-out { color: #60a5fa; }
+  .dir-in { color: #4ade80; }
+  .dir-info { color: #9aa1ad; }
+  .ts { color: #6b7280; margin-right: 6px; }
+</style>
+</head>
+<body>
+  <h1>simple-websocket</h1>
+  <div class="sub">Broadcast test server — anything sent here reaches every other connected client (e.g. your phone app).</div>
+
+  <div class="status">
+    <span class="dot" id="dot"></span>
+    <span id="statusText">Connecting…</span>
+  </div>
+
+  <div class="row">
+    <input id="typeInput" value="web.message" placeholder="type" />
+    <input id="payloadInput" placeholder="Type a message and press Send…" autofocus />
+  </div>
+  <div class="actions">
+    <button id="sendBtn">Send</button>
+    <button class="secondary" id="pingBtn">Ping</button>
+    <button class="secondary" id="clearBtn">Clear log</button>
+    <button class="secondary" id="reconnectBtn">Reconnect</button>
+    <span id="latestMsg" class="latest-badge">No messages yet</span>
+  </div>
+
+  <div id="log"></div>
+
+  <script>
+    const dot = document.getElementById("dot");
+    const statusText = document.getElementById("statusText");
+    const log = document.getElementById("log");
+    const typeInput = document.getElementById("typeInput");
+    const payloadInput = document.getElementById("payloadInput");
+
+    let ws = null;
+    let receivedCount = 0;
+    let latestFlashTimer = null;
+    const latestMsg = document.getElementById("latestMsg");
+
+    // Mirrors the mobile app's "Live Feed" trick: a monotonic count + the
+    // frame's own type/payload, so the badge visibly changes on every inbound
+    // frame even if two payloads happen to be identical back to back.
+    function showLatest(raw) {
+      receivedCount += 1;
+      let summary = raw;
+      try {
+        const parsed = JSON.parse(raw);
+        const text = parsed?.payload?.text;
+        summary = `${parsed.type}${text ? `: ${text}` : ""}`;
+      } catch {
+        // not JSON — show the raw frame as-is
+      }
+      const ts = new Date().toLocaleTimeString(undefined, { hour12: false });
+      latestMsg.textContent = `Latest #${receivedCount} · ${ts} · ${summary}`;
+
+      latestMsg.classList.add("fresh");
+      if (latestFlashTimer) clearTimeout(latestFlashTimer);
+      latestFlashTimer = setTimeout(() => latestMsg.classList.remove("fresh"), 600);
+    }
+
+    function addEntry(direction, text) {
+      const el = document.createElement("div");
+      el.className = "entry";
+      const ts = new Date().toLocaleTimeString(undefined, { hour12: false });
+      const dirLabel = direction === "out" ? "OUT" : direction === "in" ? "IN " : "···";
+      const dirClass = direction === "out" ? "dir-out" : direction === "in" ? "dir-in" : "dir-info";
+      el.innerHTML = `<span class="ts">${ts}</span><span class="${dirClass}">[${dirLabel}]</span> ${text}`;
+      log.appendChild(el);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function setStatus(state, label) {
+      dot.className = "dot " + state;
+      statusText.textContent = label;
+    }
+
+    function connect() {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      const url = `${proto}//${location.host}`;
+      setStatus("connecting", "Connecting…");
+      addEntry("info", `connecting to ${url}`);
+
+      ws = new WebSocket(url);
+
+      ws.onopen = () => {
+        setStatus("open", "Connected");
+        addEntry("info", "connected");
+      };
+
+      ws.onmessage = (event) => {
+        addEntry("in", event.data);
+        showLatest(event.data);
+      };
+
+      ws.onclose = (event) => {
+        setStatus("closed", `Closed (${event.code})`);
+        addEntry("info", `closed: code=${event.code} reason=${event.reason || "—"}`);
+      };
+
+      ws.onerror = () => {
+        addEntry("info", "socket error");
+      };
+    }
+
+    function send(type, payload) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        addEntry("info", "not connected — cannot send");
+        return;
+      }
+      const frame = JSON.stringify({ type, payload });
+      ws.send(frame);
+      addEntry("out", frame);
+    }
+
+    document.getElementById("sendBtn").addEventListener("click", () => {
+      const type = typeInput.value.trim() || "web.message";
+      const text = payloadInput.value;
+      if (!text) return;
+      send(type, { text, sentAt: Date.now() });
+      payloadInput.value = "";
+      payloadInput.focus();
+    });
+
+    payloadInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") document.getElementById("sendBtn").click();
+    });
+
+    document.getElementById("pingBtn").addEventListener("click", () => {
+      send("ping", { id: `web-${Date.now()}`, sentAt: Date.now() });
+    });
+
+    document.getElementById("clearBtn").addEventListener("click", () => {
+      log.innerHTML = "";
+    });
+
+    document.getElementById("reconnectBtn").addEventListener("click", () => {
+      if (ws) ws.close();
+      connect();
+    });
+
+    connect();
+  </script>
+</body>
+</html>

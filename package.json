@@ -1,0 +1,17 @@
+{
+  "name": "simple-websocket",
+  "version": "1.0.0",
+  "description": "Broadcast WebSocket test server, compatible with canscloud-react-native-v6's WebSocket client frame protocol ({type, payload} JSON).",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  }
+}
